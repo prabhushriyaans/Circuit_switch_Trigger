@@ -21,8 +21,9 @@ socketio = SocketIO(app)
 # --- Serial Port Configuration ---
 ser = None
 try:
+    # Change 'COM3' to your Arduino's serial port
     ser = serial.Serial('COM3', 9600, timeout=1)
-    time.sleep(2)
+    time.sleep(2)  # Give the serial port time to initialize
     print("Serial port connected.")
 except serial.SerialException as e:
     print(f"Error: {e}")
@@ -30,8 +31,9 @@ except serial.SerialException as e:
 
 # --- AI API Configuration ---
 AI_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-AI_MODEL = "deepseek/deepseek-r1:free"
-API_KEY = os.getenv("DEEPSEEK_API_KEY")
+# Using a specific Deepseek model via OpenRouter
+AI_MODEL = "meta-llama/llama-3.3-8b-instruct:free"
+API_KEY = os.getenv("META_API_KEY")
 
 # --- Global state variables ---
 last_alert_message = ""
@@ -43,7 +45,7 @@ alert_timer = None
 def get_ai_response(prompt_message: str) -> str:
     if not API_KEY:
         print("DEEPSEEK_API_KEY not set in environment.")
-        return "AI service unavailable (missing API key). Follow on-screen safety instructions and notify operator."
+        return "AI service unavailable (missing API key)."
     try:
         headers = {
             "Authorization": f"Bearer {API_KEY}",
@@ -55,9 +57,11 @@ def get_ai_response(prompt_message: str) -> str:
                 {
                     "role": "system",
                     "content": (
-                        "You are an emergency operations assistant. "
-                        "Use short, clear, actionable guidance. If you advise actions, list them as steps. "
-                        "Never delay urgent escalation if the user is unresponsive."
+                        "You are a Rescue force Operations AI. Your purpose is to analyze alerts and provide "
+                        "concise, factual reports and recommended actions to security personnel. "
+                        "Your responses should be short, to the point, and never for the victim."
+                        "you will try to locate the victim using the information provided in the alert."
+                        "The victim is only a woman who is being entangled in an emergency situation , which may be roberry or assault."
                     )
                 },
                 {"role": "user", "content": prompt_message}
@@ -71,7 +75,7 @@ def get_ai_response(prompt_message: str) -> str:
         print("AI API error details:", str(e))
         if hasattr(e, "response") and e.response is not None:
             print("API Response:", e.response.text)
-        return "AI service temporary error. Follow the standard safety checklist and contact the control room."
+        return "AI service temporary error."
 
 # --- Outbound serial helpers ---
 def send_serial(cmd: str):
@@ -89,12 +93,7 @@ def handle_emergency_timeout():
         return
     
     # Generate the follow-up emergency message for security agencies
-    duration = (datetime.datetime.now() - alert_start_time).total_seconds()
-    prompt = (
-        f"ALERT still active after {int(duration)} seconds. "
-        "Generate a clear emergency deployment notice for the victim that responders are being dispatched. "
-        "Include 3 short safety steps to follow while waiting."
-    )
+    prompt = "Urgent: User unresponsive for >30 seconds. Advise immediate deployment."
     ai_text = get_ai_response(prompt)
     
     # Send the follow-up AI message to the frontend
@@ -122,19 +121,17 @@ def set_alert_active(message: str):
     
     # Immediately get the first AI response on a new alert
     prompt = (
-        "ALERT RECEIVED. Incoming signal/message: '" + last_alert_message + "'.\n"
-        "Classify the signal type (briefly) and give the victim concise safety steps they can do right now. "
-        "If indoors vs outdoors matters, mention both options succinctly."
+        "Initial alert received. Provide a brief one-sentence summary and 3 key action steps for security personnel."
     )
     ai_text = get_ai_response(prompt)
 
     # Send the first AI message to the frontend along with the alert event
     socketio.emit('alert_event', {'message': message, 'ai_advice': ai_text})
 
-    # Start 60s timer for auto-emergency
+    # Start 30s timer for auto-emergency (changed from 60.0 to 30.0)
     if alert_timer and alert_timer.is_alive():
         alert_timer.cancel()
-    new_timer = Timer(60.0, handle_emergency_timeout)
+    new_timer = Timer(30.0, handle_emergency_timeout)
     new_timer.daemon = True
     new_timer.start()
     alert_timer = new_timer
