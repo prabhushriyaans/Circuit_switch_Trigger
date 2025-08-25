@@ -1,3 +1,4 @@
+import os
 import serial
 import time
 from threading import Thread, Timer
@@ -5,26 +6,32 @@ from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 import requests
 import datetime
+from dotenv import load_dotenv
+import secrets
+print(secrets.token_hex(16))
+
+# --- Load .env file ---
+load_dotenv()
 
 # --- Flask and SocketIO setup ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key' 
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET', 'change_me')
 socketio = SocketIO(app)
 
 # --- Serial Port Configuration ---
+ser = None
 try:
-    ser = serial.Serial('COM3', 9600, timeout=1) 
-    time.sleep(2) 
+    ser = serial.Serial('COM3', 9600, timeout=1)
+    time.sleep(2)
     print("Serial port connected.")
 except serial.SerialException as e:
     print(f"Error: {e}")
     print("Please check the port number and ensure the Arduino is connected.")
-    ser = None
 
 # --- AI API Configuration ---
-AI_API_URL = "https://api.deepseek.com/v1/chat/completions"
-API_KEY = "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"
+AI_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 AI_MODEL = "deepseek/deepseek-r1:free"
+API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 # --- Global state variables ---
 last_alert_message = ""
@@ -33,7 +40,10 @@ alert_start_time = None
 alert_timer = None
 
 # --- AI API Function ---
-def get_ai_response(prompt_message):
+def get_ai_response(prompt_message: str) -> str:
+    if not API_KEY:
+        print("DEEPSEEK_API_KEY not set in environment.")
+        return "AI service unavailable (missing API key). Follow on-screen safety instructions and notify operator."
     try:
         headers = {
             "Authorization": f"Bearer {API_KEY}",
@@ -42,68 +52,119 @@ def get_ai_response(prompt_message):
         data = {
             "model": AI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a helpful assistant for emergency services. Based on the situation and time, provide a clear and urgent response. Consider the time of day and the duration of the alert."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an emergency operations assistant. "
+                        "Use short, clear, actionable guidance. If you advise actions, list them as steps. "
+                        "Never delay urgent escalation if the user is unresponsive."
+                    )
+                },
                 {"role": "user", "content": prompt_message}
             ]
         }
-        response = requests.post(AI_API_URL, headers=headers, json=data, timeout=15)
+        response = requests.post(AI_API_URL, headers=headers, json=data, timeout=20)
         response.raise_for_status()
         ai_message = response.json()['choices'][0]['message']['content']
-        print(f"AI response received: {ai_message}")
         return ai_message
-    except requests.exceptions.RequestException as e:
-        print(f"Error calling AI API: {e}")
-        return "Failed to get AI response. Please check API connection."
+    except Exception as e:
+        print("AI API error details:", str(e))
+        if hasattr(e, "response") and e.response is not None:
+            print("API Response:", e.response.text)
+        return "AI service temporary error. Follow the standard safety checklist and contact the control room."
 
-def trigger_ai_response():
-    global alert_active, alert_start_time, last_alert_message
+# --- Outbound serial helpers ---
+def send_serial(cmd: str):
+    try:
+        if ser:
+            ser.write((cmd + "\n").encode('utf-8'))
+            print(f"[SERIAL] -> {cmd}")
+    except Exception as e:
+        print(f"Serial write failed for '{cmd}': {e}")
+
+# --- AI message flow ---
+def handle_emergency_timeout():
+    global alert_active
     if not alert_active:
         return
+    
+    # Generate the follow-up emergency message for security agencies
+    duration = (datetime.datetime.now() - alert_start_time).total_seconds()
+    prompt = (
+        f"ALERT still active after {int(duration)} seconds. "
+        "Generate a clear emergency deployment notice for the victim that responders are being dispatched. "
+        "Include 3 short safety steps to follow while waiting."
+    )
+    ai_text = get_ai_response(prompt)
+    
+    # Send the follow-up AI message to the frontend
+    socketio.emit('emergency_message', {
+        'message': "Emergency escalation triggered. " + ai_text
+    })
 
-    duration = datetime.datetime.now() - alert_start_time
-    time_of_day = datetime.datetime.now().strftime("%I:%M %p")
+    # Tell Arduino to terminate the alert with 6 beeps for the victim
+    send_serial('BEEP_6_TIMES')
     
-    prompt = f"An emergency alert has been active for {duration.total_seconds():.0f} seconds. The current time is {time_of_day}. The original message was: '{last_alert_message}'. Please provide an urgent response for security forces."
+    # Reset state
+    set_alert_inactive()
+
+# --- State helpers ---
+def set_alert_active(message: str):
+    global alert_active, alert_start_time, last_alert_message, alert_timer
     
-    ai_response = get_ai_response(prompt)
+    # Check if an alert is already active to prevent re-triggering
+    if alert_active:
+        return
+        
+    last_alert_message = message
+    alert_active = True
+    alert_start_time = datetime.datetime.now()
     
-    if ser:
-        ser.write(b'BEEP_6_TIMES\n')
-        print("Sent BEEP_6_TIMES command to Arduino.")
-    
-    socketio.emit('deployment_message', {'message': "Alert not terminated. " + ai_response})
+    # Immediately get the first AI response on a new alert
+    prompt = (
+        "ALERT RECEIVED. Incoming signal/message: '" + last_alert_message + "'.\n"
+        "Classify the signal type (briefly) and give the victim concise safety steps they can do right now. "
+        "If indoors vs outdoors matters, mention both options succinctly."
+    )
+    ai_text = get_ai_response(prompt)
+
+    # Send the first AI message to the frontend along with the alert event
+    socketio.emit('alert_event', {'message': message, 'ai_advice': ai_text})
+
+    # Start 60s timer for auto-emergency
+    if alert_timer and alert_timer.is_alive():
+        alert_timer.cancel()
+    new_timer = Timer(60.0, handle_emergency_timeout)
+    new_timer.daemon = True
+    new_timer.start()
+    alert_timer = new_timer
+
+def set_alert_inactive():
+    global alert_active, last_alert_message, alert_timer
     alert_active = False
+    last_alert_message = ""
+    if alert_timer and alert_timer.is_alive():
+        alert_timer.cancel()
 
 # --- Serial Listener Thread ---
 def serial_listener():
-    global alert_active, alert_start_time, last_alert_message, alert_timer
+    global alert_active
     print("Serial listener thread started.")
     while ser and True:
         try:
             if ser.in_waiting > 0:
                 data = ser.readline().decode('utf-8', errors='ignore').strip()
-                if "Help! Help!" in data:
-                    print("Alert message received from Arduino!")
-                    last_alert_message = data
-                    alert_active = True
-                    alert_start_time = datetime.datetime.now()
-                    
-                    if alert_timer and alert_timer.is_alive():
-                        alert_timer.cancel()
-                    
-                    alert_timer = Timer(10.0, trigger_ai_response)
-                    alert_timer.daemon = True
-                    alert_timer.start()
+                if not data:
+                    continue
+                print(f"[SERIAL] <- {data}")
 
-                    socketio.emit('alert_event', {'message': data})
+                if "Help! Help!" in data:  # incoming alert trigger
+                    set_alert_active(message=data)
                 
-                elif "alert message off." in data:
-                    print("Alert message terminated by user.")
-                    if alert_timer and alert_timer.is_alive():
-                        alert_timer.cancel()
-                    alert_active = False
-                    last_alert_message = ""
-                    socketio.emit('alert_terminated', {'message': "Alert terminated by user."})
+                elif "alert message off." in data:  # user cancels alert
+                    if alert_active:
+                        set_alert_inactive()
+                        socketio.emit('alert_terminated', {'message': "Alert terminated by user."})
 
         except serial.SerialException as e:
             print(f"Serial port error: {e}")
@@ -116,14 +177,14 @@ def serial_listener():
 # --- Flask Routes ---
 @app.route('/')
 def index():
-    return render_template('index.html', initial_status="Awaiting alert from Arduino...")
+    return render_template('index.html', initial_status="Awaiting alert from Arduino…")
 
 # --- SocketIO Events ---
 @socketio.on('connect')
 def handle_connect():
     print('Client connected:', request.sid)
     emit('status_update', {'message': 'Connected to server.'})
-    
+
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected:', request.sid)
@@ -131,7 +192,6 @@ def handle_disconnect():
 # --- Main entry point ---
 if __name__ == '__main__':
     if ser:
-        thread = Thread(target=serial_listener)
-        thread.daemon = True
+        thread = Thread(target=serial_listener, daemon=True)
         thread.start()
     socketio.run(app, debug=True, port=5000, use_reloader=False)

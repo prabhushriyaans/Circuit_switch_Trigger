@@ -1,83 +1,78 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Emergency Notifier Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Roboto', sans-serif;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emergency Notifier Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet" />
+  <style> body { font-family: 'Roboto', sans-serif; } </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
+  <div class="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-2xl space-y-6">
+    <header class="text-center">
+      <h1 class="text-3xl font-extrabold text-red-400">🚨 EMERGENCY ALERT SYSTEM 🚨</h1>
+    </header>
 
-    <div class="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-2xl space-y-6">
-
-        <header class="text-center">
-            <h1 class="text-3xl font-extrabold text-red-400">
-                <span role="img" aria-label="alarm">🚨</span> EMERGENCY ALERT SYSTEM <span role="img" aria-label="alarm">🚨</span>
-            </h1>
-        </header>
-
-        <div class="bg-slate-700 p-4 rounded-lg flex items-center justify-center shadow-md">
-            <p id="status" class="text-2xl font-bold text-red-300 animate-pulse">
-                {{ initial_status }}
-            </p>
-        </div>
-
-        <div class="bg-slate-700 p-4 rounded-lg shadow-md">
-            <h2 class="text-xl font-semibold mb-3 text-red-200">Activity Log</h2>
-            <div id="alert-list" class="bg-slate-900 p-3 rounded-md h-72 overflow-y-auto space-y-2 text-sm">
-                </div>
-        </div>
+    <div class="bg-slate-700 p-4 rounded-lg flex items-center justify-center shadow-md">
+      <p id="status" class="text-2xl font-bold text-red-300 animate-pulse">{{ initial_status }}</p>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
-    <script>
-        // ESTABLISH THE CONNECTION FIRST
-        const socket = io();
+    <div class="grid gap-4">
+      <div class="bg-slate-700 p-4 rounded-lg shadow-md">
+        <h2 class="text-xl font-semibold mb-3 text-blue-200">Latest AI Guidance</h2>
+        <div id="ai-guidance" class="bg-slate-900 p-3 rounded-md min-h-16 text-sm"></div>
+      </div>
 
-        const statusElement = document.getElementById('status');
-        const alertLogElement = document.getElementById('alert-list');
-        
-        // Handle initial status update from Flask
-        socket.on('status_update', (data) => {
-            statusElement.textContent = data.message;
-        });
+      <div class="bg-slate-700 p-4 rounded-lg shadow-md">
+        <h2 class="text-xl font-semibold mb-3 text-red-200">Activity Log</h2>
+        <div id="alert-list" class="bg-slate-900 p-3 rounded-md h-72 overflow-y-auto space-y-2 text-sm"></div>
+      </div>
+    </div>
+  </div>
 
-        // Handle incoming alerts from Arduino
-        socket.on('alert_event', (data) => {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString();
-            const message = document.createElement('div');
-            message.className = 'p-3 bg-red-700 text-red-50 rounded-md shadow-sm';
-            message.innerHTML = `<p class="font-bold">🚨 ACTIVE ALERT! <span class="font-normal text-xs text-red-200">${timeString}</span></p><p class="mt-1">${data.message}</p>`;
-            alertLogElement.prepend(message);
-            statusElement.textContent = "❗❗ ACTIVE ALERT - HELP REQUESTED ❗❗";
-        });
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('alert-list');
+    const aiEl = document.getElementById('ai-guidance');
 
-        // Handle alert termination by user
-        socket.on('alert_terminated', (data) => {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString();
-            const message = document.createElement('div');
-            message.className = 'p-3 bg-emerald-700 text-emerald-50 rounded-md shadow-sm';
-            message.innerHTML = `<p class="font-bold">🟢 TERMINATED: <span class="font-normal text-xs text-emerald-200">${timeString}</span></p><p class="mt-1">${data.message}</p>`;
-            alertLogElement.prepend(message);
-            statusElement.textContent = "Alert terminated. System is ready.";
-        });
+    function addLog(html, classes) {
+      const now = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = `p-3 rounded-md shadow-sm ${classes}`;
+      div.innerHTML = `<p class="font-bold">${now}</p><div class="mt-1">${html}</div>`;
+      logEl.prepend(div);
+    }
 
-        // Handle AI-triggered deployment message
-        socket.on('deployment_message', (data) => {
-            const message = document.createElement('div');
-            message.className = 'p-3 bg-blue-700 text-blue-50 rounded-md shadow-sm';
-            message.innerHTML = `<p class="font-bold">✅ DEPLOYMENT: <span class="font-normal text-xs text-blue-200">${new Date().toLocaleTimeString()}</span></p><p class="mt-1">${data.message}</p>`;
-            alertLogElement.prepend(message);
-            statusElement.textContent = "Help has been dispatched!";
-        });
-    </script>
+    socket.on('status_update', (data) => {
+      statusEl.textContent = data.message;
+    });
+
+    // The key change is here: the AI guidance is now part of this event.
+    socket.on('alert_event', (data) => {
+      // Add the alert message to the activity log
+      addLog(`<p class='font-bold'>🚨 ACTIVE ALERT!</p><p>${data.message}</p>`, 'bg-red-700 text-red-50');
+      statusEl.textContent = '❗❗ ACTIVE ALERT - HELP REQUESTED ❗❗';
+      
+      // Update the AI guidance box and the activity log with the new AI message
+      aiEl.innerHTML = data.ai_advice;
+      addLog(`<p class='font-bold'>🤖 Initial AI Guidance</p><div>${data.ai_advice}</div>`, 'bg-blue-700 text-blue-50');
+    });
+
+    socket.on('alert_terminated', (data) => {
+      addLog(`<p class='font-bold'>🟢 TERMINATED</p><p>${data.message}</p>`, 'bg-emerald-700 text-emerald-50');
+      statusEl.textContent = 'Alert terminated. System is ready.';
+      aiEl.innerHTML = 'Alert resolved by user. System is ready for a new alert.';
+    });
+
+    // This event is for the 60-second timeout ONLY
+    socket.on('emergency_message', (data) => {
+      aiEl.innerHTML = data.message;
+      addLog(`<p class='font-bold'>🚑 Emergency Deployed</p><div>${data.message}</div>`, 'bg-fuchsia-700 text-fuchsia-50');
+      statusEl.textContent = 'Help has been dispatched!';
+    });
+  </script>
 </body>
 </html>
